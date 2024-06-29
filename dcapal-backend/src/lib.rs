@@ -142,7 +142,6 @@ impl DcaServer {
             repos,
             providers,
         });
-        
 
         let app = Router::new()
             .route("/", get(|| async { "Greetings from DCA-Pal APIs!" }))
