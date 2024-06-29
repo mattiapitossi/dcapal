@@ -1,24 +1,35 @@
 #[macro_use]
 extern crate const_format;
 
+use std::fmt::Debug;
 use std::{
     net::{AddrParseError, SocketAddr},
     sync::Arc,
     time::Duration,
 };
 
-use axum::{
-    extract::connect_info::IntoMakeServiceWithConnectInfo,
-    middleware,
-    routing::{get, post},
-    Router,
-};
+use axum::extract::connect_info::IntoMakeServiceWithConnectInfo;
+use axum::extract::Request;
+use axum::response::IntoResponse;
+use axum::routing::post;
+use axum::{extract::State, middleware, routing::get, Router};
+use axum_extra::headers::authorization::Bearer;
+use axum_extra::headers::Authorization;
+use axum_extra::TypedHeader;
 use chrono::prelude::*;
+use clerk_rs::apis::jwks_api::Jwks;
+use clerk_rs::apis::users_api::User;
+use clerk_rs::clerk::Clerk;
+use clerk_rs::validators::authorizer::{validate_jwt, ClerkAuthorizer, ClerkError, ClerkJwt};
+use clerk_rs::validators::axum::{AxumClerkRequest, ClerkLayer};
+use clerk_rs::ClerkConfiguration;
 use deadpool_redis::{Pool, Runtime};
 use futures::future::BoxFuture;
+use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use metrics::{counter, describe_counter, describe_histogram, Unit};
+use serde::{Deserialize, Serialize};
 use tokio::{net::TcpListener, task::JoinHandle};
-use tower::ServiceBuilder;
+use tower::{Layer, ServiceBuilder};
 use tower_http::trace::TraceLayer;
 use tracing::{error, info};
 
@@ -88,6 +99,36 @@ pub struct DcaServer {
     stop_tx: tokio::sync::watch::Sender<bool>,
 }
 
+#[derive(Clone)]
+pub struct ServerConfig {
+    pub clerk_client: Clerk,
+    pub clerk_configuration: ClerkConfiguration,
+}
+
+async fn index(
+    State(server_config): State<ServerConfig>,
+    TypedHeader(Authorization(creds)): TypedHeader<Authorization<Bearer>>,
+) -> impl IntoResponse {
+    let token = creds.token().to_string();
+
+    let jwks = match Jwks::get_jwks(&server_config.clerk_client).await {
+        Ok(val) => val,
+        Err(_) => return "error".to_string(),
+    };
+
+    let header = match validate_jwt(&token, jwks) {
+        Ok((_, val)) => val,
+        Err(_) => return "error".to_string(),
+    };
+    match User::get_user(&server_config.clerk_client, &header.sub).await {
+        Ok(user) => {
+            let user_name = user.first_name.unwrap().unwrap().to_string();
+            user_name
+        }
+        Err(_) => "error".to_string(),
+    }
+}
+
 impl DcaServer {
     pub fn try_new(config: Config) -> Result<Self> {
         let config = Arc::new(config);
@@ -143,13 +184,36 @@ impl DcaServer {
             providers,
         });
 
-        let app = Router::new()
+        let clerk_configuration: ClerkConfiguration =
+            ClerkConfiguration::new(None, None, Some("".to_string()), None);
+
+        let clerk_client = Clerk::new(clerk_configuration.clone());
+
+        let open_routes = Router::new()
             .route("/", get(|| async { "Greetings from DCA-Pal APIs!" }))
             .route("/assets/fiat", get(rest::get_assets_fiat))
             .route("/assets/crypto", get(rest::get_assets_crypto))
             .route("/price/:asset", get(rest::get_price))
             .route("/import/portfolio", post(rest::import_portfolio))
-            .route("/import/portfolio/:id", get(rest::get_imported_portfolio))
+            .route("/import/portfolio/:id", get(rest::get_imported_portfolio));
+
+        let server_config = ServerConfig {
+            clerk_client,
+            clerk_configuration,
+        };
+
+        let with_auth = Router::new()
+            .route("/index", get(index))
+            .layer(ClerkLayer::new(
+                server_config.clerk_configuration.clone(),
+                None,
+                true,
+            ))
+            .with_state(server_config);
+
+        let merged_app = Router::new().merge(open_routes).merge(with_auth);
+
+        let app = merged_app
             .route_layer(
                 ServiceBuilder::new()
                     .layer(TraceLayer::new_for_http())
