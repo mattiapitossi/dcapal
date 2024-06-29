@@ -43,3 +43,4 @@ jsonschema = "0.17.1"
 uuid = { version = "1.6.1", features = ["v4"] }
 clerk-rs = { version = "0.3.0", features = ["axum"] }
 jsonwebtoken = "9.3.0"
+dotenvy = "0.15.7"
