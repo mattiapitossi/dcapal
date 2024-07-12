@@ -26,8 +26,6 @@ use tower::{Layer, ServiceBuilder};
 use tower_http::trace::TraceLayer;
 use tracing::{error, info};
 
-use supabase_rs::SupabaseClient;
-
 use crate::{
     app::{
         infra,
@@ -92,6 +90,12 @@ pub struct DcaServer {
     ctx: AppContext,
     worker_handlers: Vec<JoinHandle<()>>,
     stop_tx: tokio::sync::watch::Sender<bool>,
+}
+
+#[derive(Clone)]
+struct Auth {
+    mkt_data: Arc<MarketDataService>,
+    ip2location: Option<Arc<Ip2LocationService>>,
 }
 
 impl DcaServer {
