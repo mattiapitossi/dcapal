@@ -100,8 +100,6 @@ struct Auth {
 
 impl DcaServer {
     pub fn try_new(config: Config) -> Result<Self> {
-        dotenv().ok();
-
         let config = Arc::new(config);
 
         let http = reqwest::Client::builder()
@@ -163,7 +161,13 @@ impl DcaServer {
             .route("/import/portfolio", post(rest::import_portfolio))
             .route("/import/portfolio/:id", get(rest::get_imported_portfolio));
 
-        let with_auth = Router::new().route("/protected", get(auth::protected));
+        let with_auth = Router::new()
+            .route("/protected", get(auth::protected))
+            .layer(middleware::from_fn_with_state(
+                ctx.clone(),
+                auth::validate_jwt,
+            ))
+            .with_state(ctx.clone());
 
         let merged_app = Router::new().merge(open_routes).merge(with_auth);
 
