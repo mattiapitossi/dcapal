@@ -21,6 +21,7 @@
   },
   "homepage": "https://dcapal.com/",
   "dependencies": {
+    "@heroicons/react": "^2.1.5",
     "@react-hook/media-query": "^1.1.1",
     "@reduxjs/toolkit": "^2.0.1",
     "@supabase/auth-ui-react": "^0.4.7",
